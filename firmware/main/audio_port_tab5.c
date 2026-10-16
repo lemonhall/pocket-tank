@@ -72,6 +72,9 @@ static volatile bool s_sleep_req, s_warm_req;
 static int64_t s_quiet_since;
 static int s_volume = 2;
 static int16_t s_buf[BLOCK];
+/* what the current bring-up has handed the DMA (the log line at the end of a cue
+ * is the proof the stream ran; see docs/tab5-next.md item 2) */
+static unsigned s_played_blocks, s_played_bytes;
 /* the ES8388's DAC reference and the amp's own start-up: the same tunables as
  * the ES8311 port (`snd settle <codec ms> <amp ms>` off the director) */
 static int s_settle_codec_ms = 150, s_settle_amp_ms = 100;
@@ -155,6 +158,7 @@ static void bring_up(void) {
     amp(true);
     if (!write_silence(s_settle_amp_ms)) { i2s_dead("after the amp came up"); amp(false); esp_codec_dev_close(s_spk); return; }
     s_up = true; s_quiet_since = 0;
+    s_played_blocks = 0; s_played_bytes = 0;
     s_warm_req = false;   /* a request that stood while this came up is answered */
     ESP_LOGI(TAG, "up in %lld ms (preloaded %u bytes)", (esp_timer_get_time() - t0) / 1000, (unsigned)loaded);
 }
@@ -185,12 +189,19 @@ static void player(void *arg) {
         int live = audio_render(s_buf, BLOCK);
         xSemaphoreGive(s_mx);
         if (!write_block(s_buf, sizeof s_buf)) { i2s_dead("playing"); bring_down(); continue; }
+        /* how much the DAC actually received on this bring-up: the honest measure
+         * that the stream is flowing (the ear is the last link, not the first) */
+        s_played_blocks++; s_played_bytes += sizeof s_buf;
         int64_t now = esp_timer_get_time();
         if (live) s_quiet_since = 0;
         else if (!s_quiet_since) s_quiet_since = now;
         if (s_sleep_req || (s_idle_us && s_quiet_since && now - s_quiet_since > s_idle_us)) {
             bool sleeping = s_sleep_req;
             if (sleeping) { xSemaphoreTake(s_mx, portMAX_DELAY); audio_stop_all(); xSemaphoreGive(s_mx); }
+            ESP_LOGI(TAG, "played %u blocks (%u bytes, %u ms of audio) before going quiet%s",
+                     (unsigned)s_played_blocks, (unsigned)s_played_bytes,
+                     (unsigned)(s_played_bytes / 2 / (SND_RATE / 1000)), sleeping ? " on request" : "");
+            s_played_blocks = 0; s_played_bytes = 0;
             bring_down();
             s_sleep_req = false;
             if (sleeping) { s_warm_req = false; ulTaskNotifyTake(pdTRUE, 0); }
@@ -240,7 +251,7 @@ bool audio_port_init(i2c_master_bus_handle_t bus) {
     /* the codec chain, exactly the BSP's parameters (audio_codec_new_* own what
      * they are given, so these are static) */
     static audio_codec_i2s_cfg_t i2s_cfg;
-    i2s_cfg = (audio_codec_i2s_cfg_t){ .port = I2S_NUM_1, .tx_handle = s_tx, .clk_src = I2S_CLK_SRC_DEFAULT };
+    i2s_cfg = (audio_codec_i2s_cfg_t){ .port = I2S_NUM_1, .tx_handle = s_tx };
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
     if (!data_if) { ESP_LOGE(TAG, "no I2S data interface"); return false; }
     audio_codec_i2c_cfg_t i2c_cfg = { .port = 0, .addr = ES8388_CODEC_DEFAULT_ADDR, .bus_handle = bus };

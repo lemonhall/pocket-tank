@@ -17,7 +17,7 @@ follows - and the two places it deliberately differs are called out below.
 | chip | ESP32-P4, **silicon rev v1.3** (pre-v3: see the toolchain), 360 MHz, 32 MB hex PSRAM @ 200 MHz, 16 MB flash |
 | glass | 720 x 1280 MIPI-DSI, **ILI9881C or ST7123 or ST7121** - the unit's own (see below) |
 | touch | **GT911 (0x14) or ST712x (0x55)**, paired with the glass |
-| codec | ES8388 at 0x10 (not wired up yet: the tank is silent) |
+| codec | ES8388 at 0x10 (wired up: the port streams - see docs/tab5-next.md item 2 for the preload trap) |
 | RTC | RX8130CE at 0x32 (not wired up yet: `rtc_port_pcf85063.c` knows the PCF85063) |
 | PMIC / gauge | none: the board has a **2S Li-ion pack** watched by an INA226 at 0x41 (`battery_port_tab5.c`: pack voltage, current, a 2S curve for the percentage, charging from the current's sign) |
 | IMU | BMI270 at 0x68 (not wired up: no auto-flip, the picture is always upright) |
@@ -162,9 +162,9 @@ I (21254) display: frame 38.9 ms = polls 0.3 + tick 0.7 + prefetch wait 0.0 + re
   "illegal operands" is the only warning you get (`zero` is not allowed as the
   read-out's shift, which needs a register holding 0).
 
-Also still missing, in the order they would be worth doing: the ES8388 (sound),
-the RX8130CE (a real clock across a power-off), the BMI270 (auto-flip), the
-INA226 (the battery meter), and the ESP32-C6 over SDIO for Wi-Fi (updates over
+Also worth doing, in the order they would be worth the time: the RX8130CE (a real
+clock across a power-off), the BMI270 (auto-flip), the INA226 (the battery meter),
+and the ESP32-C6 over SDIO for Wi-Fi (updates over
 the air, the setup page's Wi-Fi step, the clock from the internet).
 **[docs/tab5-next.md](tab5-next.md) is that queue**: each item with the
 measurement that says it is missing, where the code goes, and how to verify it -

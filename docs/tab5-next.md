@@ -48,65 +48,70 @@ bytes and the funnel shift returned zeros - so those semantics want a datasheet
 and not a guess. The low-risk version of the same idea is a 256-entry
 byte -> two centred int8 values lookup table in `unpack_group`.
 
-## 2. Sound: three layers found, the last one still open
+## 2. Sound: done - the preload, a stuck peripheral, and direct writes
 
-**Harness:** a 60-line standalone project (`E:\development\.tmp\i2s_probe`, worth
-recreating: `i2s_new_channel` -> `init_std_mode` -> write, printing the return
-codes). It reproduces the tank's failure in seconds, which is what turned a
-day of guessing into measurements - and it found three separate layers.
+**It plays.** The tank's own log at the end of a cue, on the bench unit:
 
-**Layer 1, and this one is real: `i2s_channel_preload_data()` is required.**
+```
+audio: ES8388 ready at 0x20: 17 of 24 cues, bank 518 KB in flash, volume 1
+audio: up in 209 ms (preloaded 320 bytes)
+audio: played 577 blocks (184640 bytes, 5770 ms of audio) before going quiet
+audio: down (idle)
+```
+
+577 consecutive blocks with no failure, where a day earlier the third write of
+every attempt timed out. Three things had to be true, and a 60-line standalone
+probe (`E:\development\.tmp\i2s_probe`: `new_channel` -> `init_std_mode` ->
+`preload` -> `enable` -> `write`, printing every return code, plus the
+peripheral's own `bck_cnt`) is what separated them.
+
+**1. `i2s_channel_preload_data()` is required, while the channel is disabled.**
 Without it the DMA descriptor queue is empty from the start and every
 `i2s_channel_write` waits for a free descriptor that never comes
-(`ESP_ERR_TIMEOUT`/263, 0 bytes) - which is exactly what the tank saw. With a
-preload **while the channel is disabled**, writes move data (512/512 bytes,
-measured in the tank's own port). It only accepts what fits the DMA buffer
-(3072 bytes at the default 6 x 512 geometry: a 3200-byte preload loads 3072, and
-a write larger than the buffer also times out). The call is refused with
-`ESP_ERR_INVALID_STATE` ("data can only be preloaded when the channel is READY")
-if the channel is enabled, so the order is disable -> preload -> enable.
+(`ESP_ERR_TIMEOUT`/263, 0 bytes) - exactly the silence the tank had. It accepts
+only what fits the DMA buffer (3072 bytes at the default 6 x 512 geometry: a
+3200-byte preload loads 3072, and a write larger than the buffer also times out),
+and it is refused with `ESP_ERR_INVALID_STATE` ("data can only be preloaded when
+the channel is READY") while the channel is enabled. So the order is
+disable -> preload -> enable.
 
-**Layer 2: the codec dev's I2S data interface is broken here; write directly.**
-Measured back to back in `audio_port_tab5.c`: after the preload, a direct
-`i2s_channel_write` returns OK with all its bytes, while `esp_codec_dev_write`
-times out with 0 bytes. So the codec dev now only owns the ES8388 registers,
-volume and mute, and the samples go straight to the channel (`write_block`).
+**2. The codec dev's I2S data interface is not the data path here.**
+`esp_codec_dev_write` times out with 0 bytes where a direct `i2s_channel_write`
+on the same channel moves everything (measured back to back in the port). The
+ES8388 keeps `esp_codec_dev` for its registers, volume and mute; the samples go
+straight to the channel. This is also why the port's samples work on
+**esp_codec_dev 1.5.11** (what the registry BSP asks for) exactly as they do on
+1.3.4: measured both ways, 577 blocks each. No vendoring and no version pin is
+needed for that.
 
-**Layer 3, still open: the peripheral stops after two accepted writes.** With
-the preload in place, a direct write succeeds twice (2 KB of the 3 KB buffer) and
-the third times out; `bck_cnt.tx_bck_cnt` ticks during `i2s_channel_enable` and
-then freezes at 17, so it is the peripheral that stops rather than the descriptor
-chain. Reproduced in every shape tried, on IDF **v5.5.6 and v5.4.2 alike**:
-TX-only and duplex; an RX in TDM exactly as M5Stack's own BSP does it; 16 and
-48 kHz; MONO and STEREO; MCLK on GPIO 30 or unused; `bclk_div` 0 or 8;
-`auto_clear` on or off; `dma_frame_num` matched to the block or at the driver's
-default; `dma_desc_num` 4 or the default; `I2S_CLK_SRC_DEFAULT`, `_XTAL` or
-`_APLL`.
+**3. The peripheral had to be cleared.** With the preload in place, writes moved
+data but only the first two, after which every write timed out and
+`bck_cnt.tx_bck_cnt` froze - identical in every shape tried (TX-only and duplex,
+RX in TDM, 16/48 kHz, MONO/STEREO, MCLK on or off, `bclk_div` 0/8, `auto_clear`
+on/off, `dma_frame_num` and `dma_desc_num` at either end, all three clock
+sources, IDF 5.5.6 and 5.4.2). What cleared it was **writing the whole flash
+again** (partition table included; it happened while flashing M5's own demo and
+coming back). A control experiment crossing "disable+enable before every write"
+against "a 20 ms delay between writes" then had all four variants pass 8/8, so
+neither of those was ever the variable - a reset that reaches the peripheral is.
+**Next silent board: re-flash the whole chip or power-cycle it before believing
+an I2S is broken.**
 
-**The reference that says it must work:** M5Stack's own Tab5 demo
-([m5stack/M5Tab5-UserDemo](https://github.com/m5stack/M5Tab5-UserDemo), ESP-IDF
-**v5.4.2**, the same pins 30/27/29/26/28, the same ES8388 as a slave, the same
-`I2S_ROLE_MASTER`) plays audio on this hardware, and its `bsp_audio_init` differs
-from every probe shape in one more way that has not been tested end to end: it
-creates the channel duplex, enables the TX, then initialises **and enables the
-RX in TDM mode** at the same rate (`bclk_div = 8`). That probe round enabled the
-RX but forgot the preload on the TX, so it is the one combination still unmeasured
-- and the obvious next step is to build that demo here and bisect its audio path
-against the probe.
+**Two claims in the earlier version of this file were wrong and are corrected:**
+the "dead BCLK pad" reading was an artefact (the pad's input path was never
+enabled - the peripheral's own counter is the honest instrument, and it runs), and
+`I2S_CLK_SRC_DEFAULT` is not a pre-v3 trap in IDF 5.5 (`i2s_ll.h` maps it to XTAL
+under `CHIP_SUPPORT_MIN_REV < 300`), so the port's explicit `APLL` guess is gone.
+The reference that made the hunt worth continuing was M5Stack's own Tab5 demo
+([M5Tab5-UserDemo](https://github.com/m5stack/M5Tab5-UserDemo)), which plays audio
+on this hardware; it is built and flashed from `E:\development\.tmp\M5Tab5-UserDemo`
+whenever a baseline is needed.
 
-**Two corrections to what was written here before.** The "dead BCLK pad" reading
-was an artefact: the pad's input path was never enabled, and the peripheral's own
-counter shows the clock does tick. And `I2S_CLK_SRC_DEFAULT` is *not* a trap for
-pre-v3 silicon in IDF 5.5.6 - `i2s_ll.h` maps it to XTAL under
-`CHIP_SUPPORT_MIN_REV < 300`, so the port's explicit `I2S_CLK_SRC_APLL` was an
-unnecessary guess and is gone. (The same pre-v3 trap does exist in Zephyr's port:
-[zephyr#114566](https://github.com/zephyrproject-rtos/zephyr/issues/114566).)
-
-**What the port does about it:** `bring_up()` bounds itself - the first failed
-write ends the attempt, `i2s_dead()` says why once, and later cues are answered
-without touching the I2S again (`snd` on the console prints `i2s-dead`). Without
-that, one bring-up costs 15 x 1 s of timeouts and the tank stalls a second per
-cue with nothing to show for it.
+**The port also keeps what the hunt taught about honesty:** `bring_up()` bounds
+itself (the first failed write ends the attempt, says why once, later cues are
+answered without touching the I2S, `snd` prints the state), and every cue ends
+with the byte count above - the proof that the stream ran, with the ear as the
+last link rather than the first.
 
 ## 3. The clock: done - the RX8130CE
 
