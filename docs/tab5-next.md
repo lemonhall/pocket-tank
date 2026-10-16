@@ -1,9 +1,11 @@
-# Tab5: what is left
+# Tab5: what was left, and where each item stands
 
-The board works (docs/board-tab5.md is the port and its traps; this file is the
-work queue). Six things, in the order they are worth doing, plus the two things
-that are *unverified* rather than undone. Every number here is measured on the
-bench unit - ST7123 glass, silicon rev v1.3 - not estimated.
+Items 1, 3, 4 and 5 are done and verified on the unit; 2 (sound) is written but
+blocked by the chip's I2S, with the whole trail below; 6 (the radio) is
+deliberately not brought up, with the argument for that in its section. The two
+things that are *unverified* rather than undone are at the end. Every number
+here is measured on the bench unit - ST7123 glass, silicon rev v1.3 - not
+estimated.
 
 ## 1. The advisor LLM on the P4: done, 2.2 -> 10.6 tok/s
 
@@ -83,56 +85,91 @@ stay on 5.5.x for the BSP's `usb` dependency, so a fix has to come from IDF;
 (3) in the meantime the tank is silent but not slowed, and this board's other
 four ports below are the ones to finish first.
 
-## 3. The clock: the RX8130CE (a real RTC at last)
+## 3. The clock: done - the RX8130CE
 
-**Measured:** `rtc: no RTC chip on this board` - `tankcore/rtc_port_pcf85063.c`
-knows only the PCF85063 (0x51). This board has an **RX8130CE at 0x32**.
+**Shipped:** `rtc_port_rx8130.c` in `firmware/components/tankcore/`, chosen by
+target in that component's CMakeLists (the four Waveshare boards keep the
+PCF85063). This board has a Seiko **RX8130CE at 0x32**, a different register map
+(0x10..0x16 BCD, 0x17 bit 7 = the "supply dipped" VBL flag, 0x1F = the
+supplied-in reset/test state).
 
-**Why it matters:** the progression layer's "ravenous after an absence" rule
-wants a clock that survives a power-off. Without one this board takes the
-clockless path (`net_port_stub` cannot give the time back either, since there is
-no radio).
+**Verified on the unit:** the first boot seeded it from the build time
+(2026-10-16 22:43:57), the next reset read it back and set the system clock
+(22:44:16, ~19 s later - so the chip is ticking, not just holding).
 
-**Where:** `rtc_port_rx8130.c` in `firmware/components/tankcore/`, selected by
-Kconfig; the port interface is `rtc_port.h` (init / now / set).
+**Two things the first version got wrong**, both now guarded: a factory-fresh
+chip answers with bytes that are not BCD at all (0xA7 reads through bcd2bin as
+year 107 = "2107", which passes a "since 2024" test), so every register is
+checked nibble-wise with the year windowed to 2024..2100; and a chip left in its
+reset/test state (0x1F bit 6/7) does not tick, so that state is cleared at init,
+loudly.
 
-## 4. Auto-flip: the BMI270
+## 4. The flip: done - the BMI270
 
-**Measured:** `imu: no QMI8658` - `imu_port_qmi8658.c` probes the Waveshare
-board's part. This board has a **BMI270 at 0x68**.
+**Shipped:** `imu_port_bmi270.c`, chosen by target in `main/CMakeLists.txt`. The
+driver is Espressif's `espressif/bmi270` (declared for the P4 in
+`idf_component.yml`), because this chip does not run its data path until an 8 KB
+configuration blob has been downloaded into it - not something to do by hand.
 
-**Why it matters:** `main.c` calls `imu_port_inverted()` every frame to turn the
-picture with the device; today it always says "upright", so the tank ignores
-being turned over. The **settings page's ROTATION lock** works already, so this
-is only the *live* flip.
+**The physics is the QMI8658 port's, unchanged**, in g instead of counts: flip
+0.214 g, motion 0.0134 g, a 250 ms poll, three polls the other way up before
+flipping, "handled" requiring two polls in a row. The component works in g and
+the contract wants counts at +-2 g (the director's `imu` prints them), so the
+scaling happens at that boundary.
 
-**Where:** a new `imu_port_bmi270.c` against `imu_port.h` (`init / poll /
-moving / handled / inverted / sleep`); the BSP's `espressif/bmi270` component is
-already in the tree.
+**Calibrated on the unit** (standing in its stand, tilted back ~30 degrees):
+g = [+0.866 +0.070 -0.514] - the screen's vertical in landscape is the panel's
+short axis X, so up = +X. Verified: the driver initialises, the samples are
+stable, no spurious flip fires.
 
-## 5. The battery meter: the INA226
+## 5. The gauge: there is no battery, so the port reports the rail
 
-**Measured:** `battery: no AXP2101` - the port is AXP2101-only, and this board
-has none. It has an **INA226 at 0x41** (bus voltage, shunt current) plus the
-tab5's charge state on the expander. The meter is hidden ("battery -1%").
+**Measured:** the Tab5 has no battery (USB-C/DC input only), and Espressif's BSP
+has no battery code at all. The AXP2101 port answered "no PMIC" and the meter
+stayed hidden - which was already correct, but it told nobody anything.
 
-**Where:** `battery_port_ina226.c` against `battery_port.h`. Note what the
-interface wants beyond a voltage: `BAT_ON_BATTERY / BAT_CHARGING / BAT_FULL /
-BAT_PLUGGED` (the charger's phase), `battery_port_poweroff()` (this board has no
-PMIC to cut - the honest answer is "cannot", which is what the port is allowed
-to say), and the battery page's history in NVS.
+**What landed:** `battery_port_tab5.c` - the board's **INA226** (I2C 0x41,
+verified by its TI ids 0x5449/0x2260) configured for 16-sample averages,
+1.1 ms conversions, shunt+bus continuous. `battery_port_read()` always says no,
+so the pill and the low-battery notices stay hidden exactly as before; the log's
+`battery -1% <mV>` now carries the INA226's own bus voltage (measured 8161 mV on
+the bench, which is the rail it watches - the schematic would say which), and
+the director's `battery` dumps bus/shunt/current/power. Its current and power
+registers need the board's shunt resistance: **5 mOhm is assumed and said so** -
+the bus and shunt voltages need no assumption, so the derived current is logged
+with that caveat rather than presented as measured.
+`set_rail`/`trim_rails`/`pin_rail` are no-ops (no PMIC: this board's rails are
+fixed), `poweroff()` is false (nothing to cut), and the key hooks are empty - the
+side button is PWR/RST/BOOT in hardware and the tank gets no key events from it.
 
-## 6. Radio: the ESP32-C6 over SDIO
+## 6. The radio: deliberately not brought up, and here is the argument
 
-The P4 has no Wi-Fi of its own: this board's Wi-Fi 6 is an ESP32-C6 wired to the
-P4 over SDIO, and the expander's **WIFI_EN (0x44 bit 0)** powers it. Bringing it
-up means `espressif/esp_hosted` (with the C6's slave firmware in a partition)
-plus `esp_wifi_remote`, and then `net_port_esp.c` could be built for this target
-instead of `net_port_stub.c`. Until then: no updates over the air (the cable
-works), no Wi-Fi step in the first-run page, and no clock from the internet.
+**The tank does not need the internet.** The advisor is on-device (7.5 MB Q4
+model in flash, 10.6 tok/s on this chip), the save is local NVS, and every cue
+and every rule is local. What the radio adds is exactly three conveniences, in
+order of value:
 
-**Why it is last:** it is the only item that needs a new flash partition and a
-second chip's firmware, and nothing else in the tank waits on it.
+1. **over-the-air updates** (from 0.3 a tank updates itself) - without it the
+   cable is the only path, which works today (`tools/flash_tab5.ps1`);
+2. **first-time provisioning over the installer page** (Improv: tell it your
+   Wi-Fi from a browser) - without it the cable is again the path;
+3. **network time** - and the Tab5 now has its own RX8130CE (item 3), so this
+   one is already covered.
+
+**Nothing hangs or lies without it.** `net_port_stub.c` answers *every* network
+call at once with `NET_FAILED`/`NET_ERR_RADIO` (its own comment: "so no page
+waits on it"), and `update.c` turns that reason into its own page: "NO RADIO -
+THE WI-FI RADIO DID NOT START. TRY AGAIN LATER". The scan/connect/check/install
+calls all return immediately, and `net_time_sync` returns false.
+
+**What it would take**, if it is ever wanted: the P4 has no radio of its own, so
+Wi-Fi 6 comes from the board's **ESP32-C6 over SDIO** - `espressif/esp_hosted`
+with the C6's slave firmware in a new partition, `esp_wifi_remote`, the
+expander's WIFI_EN (0x44 bit 0), and a replacement for `net_port_stub.c` with
+`net_port_esp.c` on this target. That is a multi-hour, partition-touching job
+whose only payoff is items 1 and 2 above, and - given that the I2S peripheral
+turned out not to start on this pre-v3 silicon (item 2) - it may well meet its
+own platform surprises. Left undone on purpose, not by oversight.
 
 ---
 

@@ -1,5 +1,13 @@
-set(SRCS main.c director.c brightness.c batlog.c codec_port.c advisor_llm_esp.c battery_port_axp2101.c
+set(SRCS main.c director.c brightness.c batlog.c codec_port.c advisor_llm_esp.c
          update_mode.c model_trailer.c)
+# the battery port: the Waveshare boards' AXP2101 PMIC gauge, or the Tab5's
+# INA226 input monitor (the board has no battery: the meter stays hidden and the
+# port reports the supply instead)
+if(CONFIG_IDF_TARGET_ESP32P4)
+    list(APPEND SRCS battery_port_tab5.c)
+else()
+    list(APPEND SRCS battery_port_axp2101.c)
+endif()
 # the IMU port: the Waveshare boards' QMI8658, or the Tab5's Bosch BMI270 (which
 # needs its configuration blob downloaded, hence the espressif/bmi270 component)
 if(CONFIG_IDF_TARGET_ESP32P4)
