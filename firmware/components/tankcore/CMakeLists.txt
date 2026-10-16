@@ -25,3 +25,6 @@ endif()
 if(CONFIG_POCKET_TANK_SQUARE)  # the square's 480 x 480 tank
     target_compile_definitions(${COMPONENT_LIB} PUBLIC TANK_SQUARE)
 endif()
+if(CONFIG_POCKET_TANK_TAB5)    # the Tab5's 720 x 405 landscape tank (ESP32-P4, 720 x 1280 DSI glass)
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC TANK_TAB5)
+endif()

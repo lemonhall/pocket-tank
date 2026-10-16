@@ -37,4 +37,8 @@ sim/sheets/
 # this bench's boards (USB serials) for flash_round.sh / flash_watch.sh
 tools/boards.local.sh
 sim/build-square/
+# the Tab5's own build dir and simulator (docs/board-tab5.md)
+firmware/build-tab5/
+sim/build-tab5/
+sim/fishsim-tab5
 sim/fishsim-square
