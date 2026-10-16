@@ -1,5 +1,12 @@
-set(SRCS main.c director.c brightness.c batlog.c codec_port.c advisor_llm_esp.c battery_port_axp2101.c imu_port_qmi8658.c
+set(SRCS main.c director.c brightness.c batlog.c codec_port.c advisor_llm_esp.c battery_port_axp2101.c
          update_mode.c model_trailer.c)
+# the IMU port: the Waveshare boards' QMI8658, or the Tab5's Bosch BMI270 (which
+# needs its configuration blob downloaded, hence the espressif/bmi270 component)
+if(CONFIG_IDF_TARGET_ESP32P4)
+    list(APPEND SRCS imu_port_bmi270.c)
+else()
+    list(APPEND SRCS imu_port_qmi8658.c)
+endif()
 # the net port: the ESP32-S3 boards have Wi-Fi, the ESP32-P4 (the M5Stack Tab5)
 # has none - its Wi-Fi 6 comes from an ESP32-C6 on SDIO, which this port does
 # not bring up yet, so that target gets net_port_stub.c (every network call
@@ -42,6 +49,9 @@ endif()
 set(TAB5_REQUIRES "")
 if(CONFIG_POCKET_TANK_DISPLAY_TAB5)
     list(APPEND TAB5_REQUIRES esp_driver_ledc)
+endif()
+if(CONFIG_IDF_TARGET_ESP32P4)
+    list(APPEND TAB5_REQUIRES bmi270)      # the Tab5's accelerometer (imu_port_bmi270.c)
 endif()
 idf_component_register(
     SRCS ${SRCS}
