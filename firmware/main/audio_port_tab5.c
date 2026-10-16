@@ -2,34 +2,45 @@
  * IO expander. See audio_port.h and docs/AUDIO.md for the design (the mixer in
  * common/audio.c, 10 ms blocks off the tank task, prewarm under the finger).
  *
- * THIS PORT IS WRITTEN AND BLOCKED, and the block is not in the tank's code:
- * **I2S TX does not start on this unit.** The channel is created, configured and
- * enabled without an error, and then every write times out with 0 bytes done
- * (ESP_ERR_TIMEOUT / 263): the DMA's descriptor queue never frees because the
- * peripheral never shifts a frame, and sampling the BCLK pad shows it dead
- * (0 of 4000 samples high, 0 transitions). Measured 2026-10-16 on this board
- * (ESP32-P4 silicon rev v1.3) with ESP-IDF v5.5.6, on I2S0 and I2S1, with
- * I2S_CLK_SRC_XTAL and I2S_CLK_SRC_APLL, at 16 kHz and 48 kHz, in MONO and
- * STEREO, with the BSP's own channel and with this port's, and *before* the
- * display/PPA/DSI are initialised as well as after. The APLL itself does engage
- * ("APLL is occupied already, it is working at 8191999 Hz"), so it is the
- * peripheral, not the clock tree's source selection.
+ * THIS PORT IS WRITTEN, AND ITS I2S IS STILL SHORT OF WORKING. What is known, all
+ * of it measured on this board (ESP32-P4 silicon rev v1.3) with a 60-line
+ * standalone probe, on ESP-IDF v5.5.6 and v5.4.2 alike:
  *
- * One real trap was found and fixed on the way, and it is worth keeping even
- * after the above is solved: `I2S_CLK_SRC_DEFAULT` (0) means "auto-select the
- * fastest source", which on the P4 is `I2S_CLK_SRC_PLL_160M` - and the P4's
- * clk_tree_defs.h marks that source "only supported on P4 hw_ver3". This unit is
- * pre-v3, so the port asks for the APLL explicitly (both in its own std config
- * and in the codec dev's `audio_codec_i2s_cfg_t.clk_src`, which is what the
- * codec dev reconfigures with).
+ *   1. `i2s_channel_preload_data()` **must** be called while the channel is
+ *      disabled, before enable. Without it the DMA's descriptor queue is empty
+ *      from the start and every `i2s_channel_write` waits for a free descriptor
+ *      that never comes: ESP_ERR_TIMEOUT with 0 bytes. With it, writes move data.
+ *      It only accepts what fits the DMA buffer (3072 bytes at the driver's
+ *      default 6 x 512 geometry; a 3200-byte preload loads 3072, and a write
+ *      larger than the buffer times out).
+ *   2. After the preload, a **direct `i2s_channel_write` works and the codec
+ *      dev's own I2S data interface does not** (measured back to back in this
+ *      port: direct 512/512 bytes OK, `esp_codec_dev_write` timed out). So the
+ *      codec dev keeps the ES8388 registers, volume and mute, and the samples go
+ *      to the channel directly (write_block below).
+ *   3. What still stops it: after exactly two accepted writes (2 KB of the 3 KB
+ *      buffer) the DMA goes quiet and every later write times out, while
+ *      `bck_cnt.tx_bck_cnt` freezes at 17 - i.e. the peripheral stops, not the
+ *      descriptor chain. That is reproducible in every shape tried: TX-only and
+ *      duplex, an RX in TDM (as M5's own BSP does), 16 and 48 kHz, MONO and
+ *      STEREO, MCLK on GPIO 30 or unused, `bclk_div` 0 or 8, `auto_clear` on or
+ *      off, `I2S_CLK_SRC_DEFAULT`/`XTAL`/`APLL`, `dma_frame_num` matched to the
+ *      block or left at the default. M5Stack's own Tab5 demo (ESP-IDF v5.4.2)
+ *      plays audio on this hardware, so its configuration differs somewhere this
+ *      probe has not found - the next step is to build that demo and bisect.
+ *   4. Corrected on the way, and worth not repeating: the "dead BCLK" reading
+ *      from sampling the pad was an artefact (the pad's input path was never
+ *      enabled); the peripheral's own counter is the honest instrument. And
+ *      `I2S_CLK_SRC_DEFAULT` on pre-v3 silicon maps to XTAL in IDF 5.5's
+ *      i2s_ll.h, so the port's earlier explicit `I2S_CLK_SRC_APLL` was an
+ *      unnecessary guess and is gone.
  *
- * What it does about the block: bring_up() bounds itself. If a silence write
- * fails, the port gives up on that bring-up, says so once (with the numbers),
- * and answers every later cue without touching the I2S again - the tank runs,
- * silent, instead of losing a second per 10 ms block to write timeouts (which is
- * what an unbounded port does here: 15 x 1 s for one bring-up, no sound).
- * `snd` on the console prints "i2s-dead", and docs/tab5-next.md carries the
- * trail for whoever picks this up. */
+ * What it does about all that: bring_up() bounds itself. If a silence write
+ * fails, the port gives up on that bring-up, says so once (with the numbers), and
+ * answers every later cue without touching the I2S again - the tank runs, silent,
+ * instead of losing a second per 10 ms block to write timeouts. `snd` on the
+ * console prints "i2s-dead", and docs/tab5-next.md item 2 carries the full trail
+ * for whoever picks this up. */
 #include "audio_port.h"
 #include "audio.h"
 #include "board_pins.h"
@@ -75,11 +86,22 @@ static void amp(bool on) {
         ESP_LOGW(TAG, "speaker enable %s failed", on ? "on" : "off");
 }
 
+/* THE WRITE PATH (2026-10-17). The tank's sound goes straight to the I2S
+ * channel, not through `esp_codec_dev_write`. Measured on this unit: after the
+ * preload, a direct `i2s_channel_write` moves 512/512 bytes, while the codec
+ * dev's own I2S data interface times out with 0 bytes on every call - so the
+ * codec dev stays for what it is good at (ES8388 registers, volume, mute, the
+ * sample-rate setup) and the samples go to the peripheral directly.
+ * false = the I2S did not take the block. */
+static bool write_block(const void *buf, size_t n) {
+    size_t w = 0;
+    return i2s_channel_write(s_tx, buf, n, &w, pdMS_TO_TICKS(500)) == ESP_OK && w == n;
+}
 /* one block of silence; false = the I2S did not take it (see the header) */
 static bool write_silence(int ms) {
     memset(s_buf, 0, sizeof s_buf);
     for (int i = 0; i < ms / 10; i++)
-        if (esp_codec_dev_write(s_spk, s_buf, sizeof s_buf) != 0) return false;
+        if (!write_block(s_buf, sizeof s_buf)) return false;
     return true;
 }
 /* after the first failure there is no point trying again: say so once, with the
@@ -87,21 +109,54 @@ static bool write_silence(int ms) {
 static void i2s_dead(const char *where) {
     if (s_i2s_dead) return;
     s_i2s_dead = true;
-    ESP_LOGW(TAG, "I2S takes no data (%s): every write times out with 0 bytes on this chip/IDF "
-                  "(see audio_port_tab5.c) - the tank stays silent", where);
+    ESP_LOGW(TAG, "I2S takes no data (%s): a write timed out with 0 bytes (the preload note in "
+                  "bring_up has the story) - the tank stays silent", where);
 }
 
-/* power up: codec open (which enables the I2S) -> zeros -> amp -> zeros */
+/* power up: codec open (which enables the I2S) -> THE PRELOAD -> zeros -> amp -> zeros */
 static void bring_up(void) {
     int64_t t0 = esp_timer_get_time();
     esp_codec_dev_sample_info_t fs = { .bits_per_sample = 16, .channel = 1, .sample_rate = SND_RATE };
     bool ok = esp_codec_dev_open(s_spk, &fs) == 0;
-    if (!ok || !write_silence(s_settle_codec_ms)) { i2s_dead("bring-up"); esp_codec_dev_close(s_spk); return; }
+    if (!ok) { i2s_dead("codec open"); esp_codec_dev_close(s_spk); return; }
+    /* THE TRAP THIS PORT FELL INTO (2026-10-17), and the reason the tank was
+     * silent: on this chip the DMA's descriptor queue is only filled by
+     * `i2s_channel_preload_data()`, and that call is refused while the channel is
+     * enabled (ESP_ERR_INVALID_STATE). Without it every `i2s_channel_write` waits
+     * for a free descriptor that never comes and times out with 0 bytes - while
+     * the bit clock runs perfectly the whole time (`bck_cnt.tx_bck_cnt` advances;
+     * the "dead BCLK" readings from the pin were the pad's input path, not a
+     * stopped clock). M5Stack's own demo never meets this; its codec path leaves
+     * descriptors preloaded.
+     * So, with the channel the codec's open just enabled: disable -> preload
+     * silence -> enable. Established with a 60-line probe on this unit, IDF
+     * 5.4.2 and 5.5.6 alike (docs/tab5-next.md item 2). */
+    /* preload FIRST (the channel is normally still disabled here); if the
+     * codec's open did enable it, IDF answers ESP_ERR_INVALID_STATE and only
+     * then do the disable/preload dance. Calling disable on a channel that was
+     * never enabled trips the driver's own bookkeeping ("the channel has not
+     * been enabled yet") and is what kept this from working. */
+    memset(s_buf, 0, sizeof s_buf);
+    size_t loaded = 0;
+    esp_err_t pr = i2s_channel_preload_data(s_tx, s_buf, sizeof s_buf, &loaded);
+    if (pr == ESP_ERR_INVALID_STATE) {
+        i2s_channel_disable(s_tx);
+        pr = i2s_channel_preload_data(s_tx, s_buf, sizeof s_buf, &loaded);
+    }
+    esp_err_t en = i2s_channel_enable(s_tx);
+    if (pr != ESP_OK || en != ESP_OK) {
+        ESP_LOGW(TAG, "preload %s (%u bytes) / enable %s", esp_err_to_name(pr), (unsigned)loaded, esp_err_to_name(en));
+        i2s_dead("preload"); esp_codec_dev_close(s_spk); return;
+    }
+    /* the direct-write check that found the codec dev's data path broken, and the
+     * step-by-step trace with the peripheral's BCLK counter, live in the commit
+     * and in docs/tab5-next.md item 2 - not in the hot path */
+    if (!write_silence(s_settle_codec_ms)) { i2s_dead("bring-up"); esp_codec_dev_close(s_spk); return; }
     amp(true);
     if (!write_silence(s_settle_amp_ms)) { i2s_dead("after the amp came up"); amp(false); esp_codec_dev_close(s_spk); return; }
     s_up = true; s_quiet_since = 0;
     s_warm_req = false;   /* a request that stood while this came up is answered */
-    ESP_LOGI(TAG, "up in %lld ms", (esp_timer_get_time() - t0) / 1000);
+    ESP_LOGI(TAG, "up in %lld ms (preloaded %u bytes)", (esp_timer_get_time() - t0) / 1000, (unsigned)loaded);
 }
 /* power down: amp -> zeros -> codec closed (which disables the I2S) */
 static void bring_down(void) {
@@ -129,7 +184,7 @@ static void player(void *arg) {
         xSemaphoreTake(s_mx, portMAX_DELAY);
         int live = audio_render(s_buf, BLOCK);
         xSemaphoreGive(s_mx);
-        if (esp_codec_dev_write(s_spk, s_buf, sizeof s_buf) != 0) { i2s_dead("playing"); bring_down(); continue; }
+        if (!write_block(s_buf, sizeof s_buf)) { i2s_dead("playing"); bring_down(); continue; }
         int64_t now = esp_timer_get_time();
         if (live) s_quiet_since = 0;
         else if (!s_quiet_since) s_quiet_since = now;
@@ -161,23 +216,31 @@ bool audio_port_init(i2c_master_bus_handle_t bus) {
      * hides its channel inside the codec dev, and this way the idle state really
      * does stop the clocks (docs/AUDIO.md's power story) */
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-    cc.dma_desc_num = 4; cc.dma_frame_num = BLOCK;
+    /* auto_clear: without it an underrun stops the TX FIFO asking the DMA for
+     * more data, so the descriptor queue never refills and every write after the
+     * first one times out (the BSP and M5's demo both set it). */
+    cc.auto_clear = true;
+    /* the DMA geometry stays at the driver's default: a custom dma_desc_num /
+     * dma_frame_num is one of the two things that kept the preload fix from
+     * working, and IDF re-aligns the frame count to 64 bytes anyway. */
     if (i2s_new_channel(&cc, &s_tx, NULL) != ESP_OK) { ESP_LOGE(TAG, "no I2S channel"); return false; }
     i2s_std_config_t std = {
         .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SND_RATE),               /* MCLK = 256 fs */
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = { .mclk = T_PIN_I2S_MCLK, .bclk = T_PIN_I2S_BCLK, .ws = T_PIN_I2S_WS,
-                      .dout = T_PIN_I2S_DOUT, .din = T_PIN_I2S_DIN,
+                      .dout = T_PIN_I2S_DOUT, .din = I2S_GPIO_UNUSED,
                       .invert_flags = { 0 } },
     };
-    /* the P4's auto-selected source is PLL_F160M, which pre-v3 silicon does not
-     * have (clk_tree_defs.h): ask for the APLL by name */
-    std.clk_cfg.clk_src = I2S_CLK_SRC_APLL;
+    /* I2S_CLK_SRC_DEFAULT is what the working probe used on this unit: IDF 5.5
+     * maps it to XTAL for pre-v3 silicon (i2s_ll.h's CHIP_SUPPORT_MIN_REV check),
+     * and asking for the APLL by name was the port's own earlier guess - it is
+     * the second thing that kept the preload fix from working. */
+    std.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
     if (i2s_channel_init_std_mode(s_tx, &std) != ESP_OK) { ESP_LOGE(TAG, "I2S std init failed"); return false; }
     /* the codec chain, exactly the BSP's parameters (audio_codec_new_* own what
      * they are given, so these are static) */
     static audio_codec_i2s_cfg_t i2s_cfg;
-    i2s_cfg = (audio_codec_i2s_cfg_t){ .port = I2S_NUM_1, .tx_handle = s_tx, .clk_src = I2S_CLK_SRC_APLL };
+    i2s_cfg = (audio_codec_i2s_cfg_t){ .port = I2S_NUM_1, .tx_handle = s_tx, .clk_src = I2S_CLK_SRC_DEFAULT };
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
     if (!data_if) { ESP_LOGE(TAG, "no I2S data interface"); return false; }
     audio_codec_i2c_cfg_t i2c_cfg = { .port = 0, .addr = ES8388_CODEC_DEFAULT_ADDR, .bus_handle = bus };

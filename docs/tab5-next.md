@@ -48,42 +48,65 @@ bytes and the funnel shift returned zeros - so those semantics want a datasheet
 and not a guess. The low-risk version of the same idea is a 256-entry
 byte -> two centred int8 values lookup table in `unpack_group`.
 
-## 2. Sound: the port is written, the chip's I2S is the block
+## 2. Sound: three layers found, the last one still open
 
-**Measured:** the ES8388 answers at I2C 0x10 and the tank's codec device opens
-("ES8388: Start on mode:2", "Adev_Codec: Open codec device OK", 17 of 24 cues,
-518 KB bank), but **I2S TX does not start on this unit**: every write times out
-with 0 bytes done (`ESP_ERR_TIMEOUT`/263), the DMA's descriptor queue never
-frees, and the BCLK pad is dead (0 of 4000 samples high, 0 transitions). Tried
-and all identical: I2S0 and I2S1; `I2S_CLK_SRC_XTAL` and `I2S_CLK_SRC_APLL`; 16
-kHz and 48 kHz; MONO and STEREO; the BSP's own channel and this port's; and
-*before* the display/PPA/DSI are initialised as well as after. The APLL does
-engage ("APLL is occupied already, it is working at 8191999 Hz"), so the clock
-tree's source selection is not the problem - the peripheral never shifts a frame.
+**Harness:** a 60-line standalone project (`E:\development\.tmp\i2s_probe`, worth
+recreating: `i2s_new_channel` -> `init_std_mode` -> write, printing the return
+codes). It reproduces the tank's failure in seconds, which is what turned a
+day of guessing into measurements - and it found three separate layers.
 
-**One real trap found and fixed on the way** (keep it even once the above is
-solved): `I2S_CLK_SRC_DEFAULT` (0) means "auto-select the fastest source", which
-on the P4 is `I2S_CLK_SRC_PLL_160M` - and `clk_tree_defs.h` marks that source
-"only supported on P4 hw_ver3". This unit is **pre-v3** (rev v1.3), so
-`audio_port_tab5.c` asks for the APLL explicitly, both in its own `std` config
-and in the codec dev's `audio_codec_i2s_cfg_t.clk_src` (which is what the codec
-dev reconfigures with). The same trap exists in the Zephyr port of this driver
-([zephyr#114566](https://github.com/zephyrproject-rtos/zephyr/issues/114566)).
+**Layer 1, and this one is real: `i2s_channel_preload_data()` is required.**
+Without it the DMA descriptor queue is empty from the start and every
+`i2s_channel_write` waits for a free descriptor that never comes
+(`ESP_ERR_TIMEOUT`/263, 0 bytes) - which is exactly what the tank saw. With a
+preload **while the channel is disabled**, writes move data (512/512 bytes,
+measured in the tank's own port). It only accepts what fits the DMA buffer
+(3072 bytes at the default 6 x 512 geometry: a 3200-byte preload loads 3072, and
+a write larger than the buffer also times out). The call is refused with
+`ESP_ERR_INVALID_STATE` ("data can only be preloaded when the channel is READY")
+if the channel is enabled, so the order is disable -> preload -> enable.
+
+**Layer 2: the codec dev's I2S data interface is broken here; write directly.**
+Measured back to back in `audio_port_tab5.c`: after the preload, a direct
+`i2s_channel_write` returns OK with all its bytes, while `esp_codec_dev_write`
+times out with 0 bytes. So the codec dev now only owns the ES8388 registers,
+volume and mute, and the samples go straight to the channel (`write_block`).
+
+**Layer 3, still open: the peripheral stops after two accepted writes.** With
+the preload in place, a direct write succeeds twice (2 KB of the 3 KB buffer) and
+the third times out; `bck_cnt.tx_bck_cnt` ticks during `i2s_channel_enable` and
+then freezes at 17, so it is the peripheral that stops rather than the descriptor
+chain. Reproduced in every shape tried, on IDF **v5.5.6 and v5.4.2 alike**:
+TX-only and duplex; an RX in TDM exactly as M5Stack's own BSP does it; 16 and
+48 kHz; MONO and STEREO; MCLK on GPIO 30 or unused; `bclk_div` 0 or 8;
+`auto_clear` on or off; `dma_frame_num` matched to the block or at the driver's
+default; `dma_desc_num` 4 or the default; `I2S_CLK_SRC_DEFAULT`, `_XTAL` or
+`_APLL`.
+
+**The reference that says it must work:** M5Stack's own Tab5 demo
+([m5stack/M5Tab5-UserDemo](https://github.com/m5stack/M5Tab5-UserDemo), ESP-IDF
+**v5.4.2**, the same pins 30/27/29/26/28, the same ES8388 as a slave, the same
+`I2S_ROLE_MASTER`) plays audio on this hardware, and its `bsp_audio_init` differs
+from every probe shape in one more way that has not been tested end to end: it
+creates the channel duplex, enables the TX, then initialises **and enables the
+RX in TDM mode** at the same rate (`bclk_div = 8`). That probe round enabled the
+RX but forgot the preload on the TX, so it is the one combination still unmeasured
+- and the obvious next step is to build that demo here and bisect its audio path
+against the probe.
+
+**Two corrections to what was written here before.** The "dead BCLK pad" reading
+was an artefact: the pad's input path was never enabled, and the peripheral's own
+counter shows the clock does tick. And `I2S_CLK_SRC_DEFAULT` is *not* a trap for
+pre-v3 silicon in IDF 5.5.6 - `i2s_ll.h` maps it to XTAL under
+`CHIP_SUPPORT_MIN_REV < 300`, so the port's explicit `I2S_CLK_SRC_APLL` was an
+unnecessary guess and is gone. (The same pre-v3 trap does exist in Zephyr's port:
+[zephyr#114566](https://github.com/zephyrproject-rtos/zephyr/issues/114566).)
 
 **What the port does about it:** `bring_up()` bounds itself - the first failed
 write ends the attempt, `i2s_dead()` says why once, and later cues are answered
 without touching the I2S again (`snd` on the console prints `i2s-dead`). Without
 that, one bring-up costs 15 x 1 s of timeouts and the tank stalls a second per
 cue with nothing to show for it.
-
-**What is left, in the order worth trying:** (1) build a minimal I2S TX test
-against another IDF line (5.4.x, or a newer 5.5.x than the v5.5.6 used here) to
-see whether this is a regression or a pre-v3 gap in the I2S HAL - the tank must
-stay on 5.5.x for the BSP's `usb` dependency, so a fix has to come from IDF;
-(2) ask Espressif/M5 whether pre-v3 P4 silicon needs an I2S workaround (the
-"huge hardware difference" note in `Kconfig.hw_support` suggests it may);
-(3) in the meantime the tank is silent but not slowed, and this board's other
-four ports below are the ones to finish first.
 
 ## 3. The clock: done - the RX8130CE
 
