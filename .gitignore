@@ -42,3 +42,7 @@ firmware/build-tab5/
 sim/build-tab5/
 sim/fishsim-tab5
 sim/fishsim-square
+# the S3 boards' build dirs, whoever names them (tools/flash*.sh use fw-build*,
+# the Tab5's docs use build-tab5, and a bench check may use build-s3*)
+firmware/fw-build*/
+firmware/build-s3*/

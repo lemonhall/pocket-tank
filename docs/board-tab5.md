@@ -19,7 +19,7 @@ follows - and the two places it deliberately differs are called out below.
 | touch | **GT911 (0x14) or ST712x (0x55)**, paired with the glass |
 | codec | ES8388 at 0x10 (not wired up yet: the tank is silent) |
 | RTC | RX8130CE at 0x32 (not wired up yet: `rtc_port_pcf85063.c` knows the PCF85063) |
-| PMIC / gauge | none: an INA226 at 0x41 measures the input (not wired up: the battery meter is hidden) |
+| PMIC / gauge | none: the board has a **2S Li-ion pack** watched by an INA226 at 0x41 (`battery_port_tab5.c`: pack voltage, current, a 2S curve for the percentage, charging from the current's sign) |
 | IMU | BMI270 at 0x68 (not wired up: no auto-flip, the picture is always upright) |
 | radio | **none on the chip.** Wi-Fi 6 comes from an ESP32-C6 on SDIO (esp_hosted), which this port does not bring up: `net_port_stub.c` answers every network call "no radio" |
 | buttons | the side button is PWR/RST/BOOT (a single press is a reset, a double-click powers off, a hold is download mode); there is no PWR-sense line, so `board_pwr_sense_pin()` is -1 |

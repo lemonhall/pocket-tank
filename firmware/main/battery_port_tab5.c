@@ -1,17 +1,26 @@
-/* battery_port_tab5.c - the Tab5 has no battery, so this port does not pretend
- * to be a fuel gauge: battery_port_read() always says no, and the tank hides the
- * meter exactly as it does on a board with no PMIC. What the board *does* have
- * is an INA226 (I2C 0x41) on its DC input, and that is worth reporting: the log
- * line's "battery -1% <mV>" then shows the supply (5 V present and steady, or
- * sagging under load), and the director's `battery` dumps the chip's bus/shunt
- * voltage, current and power.
+/* battery_port_tab5.c - the Tab5's battery: a 2S Li-ion pack watched by the
+ * board's INA226 (I2C 0x41, verified by its TI ids 0x5449/0x2260). The Waveshare
+ * boards use an AXP2101 fuel gauge; this board has no PMIC, so everything here
+ * is the INA226 plus arithmetic.
  *
+ * WHAT IT READS (measured on the bench unit, 2026-10-16):
+ *   bus voltage 8173 mV  - a 2S pack, 4.09 V/cell, so ~90% charged
+ *   shunt       -1392.5 uV = -278 mA at the assumed 5 mOhm = 2.3 W
  * The INA226 is a shunt monitor, so its current and power registers need the
- * board's shunt resistance: 5 mOhm is *assumed* here (a common choice for a
- * 5 A-capable input monitor, and the Tab5's schematic is not in this repo). The
- * bus and shunt voltages need no such assumption - they are what the chip
- * measures - so the derived current is logged with the assumption spelled out,
- * and a schematic check can correct the one constant below. */
+ * board's shunt resistance. 5 mOhm is *assumed* (the schematic is not in this
+ * repo) and the register value agrees with it (current reg -278 mA matches the
+ * shunt arithmetic), but the sign convention - which way round IN+/IN- sit -
+ * cannot be read off the chip. `CHARGING_SIGN` below is the hypothesis that a
+ * *negative* current means charge flowing in, which is what the -278 mA reading
+ * showed with the cable in and the tank drawing 2.3 W; the tank's own `batlog`
+ * history is what settles it (unplug for a minute, plug back, then read
+ * `batlog`: the segment with no cable must read ON BATTERY). If it comes out
+ * the other way, flip that one constant.
+ *
+ * The percentage is a 2S Li-ion open-circuit table (8.40 V = 100% ... 6.00 V =
+ * 0%) interpolated linearly, with the pack's internal resistance compensated
+ * for while discharging so a load does not read as a flat battery:
+ * V_open = V_measured + I_discharge * PACK_ESR. */
 #include "battery_port.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -31,15 +40,29 @@ static const char *TAG = "battery";
 #define REG_DIE_ID     0xFF     /* 0x2260 */
 
 #define SHUNT_MOHM     5        /* ASSUMED (see the header) */
-#define CURRENT_LSB_MA 1        /* 1 mA per LSB: CAL = 0.00512 / (lsb_A * R_ohm) */
 #define CAL_VALUE      (int)(0.00512f / (0.001f * (SHUNT_MOHM / 1000.0f)))
+#define CONFIG_VALUE   0x4927   /* AVG=16, 1.1 ms conversions, shunt+bus continuous */
 
-/* AVG=16 samples, 1.1 ms conversions, shunt+bus continuous */
-#define CONFIG_VALUE   0x4927
+/* a negative current means charge flowing in (see the header) */
+#define CHARGING_SIGN  (-1)
+#define CHARGE_MA_MIN  30       /* below this the current is read as "nothing much" */
+#define FULL_MV        8300     /* 2S at 4.15 V/cell: the charger's target is close */
+#define PACK_ESR_MOHM  150      /* the pack's own resistance, for the load sag */
+
+/* 2S Li-ion, open circuit. Linear in between; a 2S pack spends most of its life
+ * between 7.8 and 7.2 V, which is where the steps are finest. */
+static const struct { int mv, pct; } k_curve[] = {
+    { 8400, 100 }, { 8250, 95 }, { 8100, 88 }, { 8000, 80 }, { 7900, 70 },
+    { 7800, 60 },  { 7700, 50 }, { 7600, 42 }, { 7500, 35 }, { 7400, 28 },
+    { 7300, 22 },  { 7200, 16 },  { 7000, 9 },  { 6800, 4 },  { 6000, 0 },
+};
+#define CURVE_N (sizeof k_curve / sizeof k_curve[0])
 
 static i2c_master_dev_handle_t s_dev;
 static int64_t s_next_us;
-static int s_bus_mv;            /* cached ~1 s, like the AXP2101 port */
+static int s_bus_mv;            /* everything below is cached ~1 s, like the AXP2101 port */
+static int s_cur_ma;            /* signed: see CHARGING_SIGN */
+static int s_pct = -1;
 
 static bool rd16(uint8_t reg, uint16_t *out) {
     uint8_t b[2];
@@ -52,18 +75,36 @@ static bool wr16(uint8_t reg, uint16_t val) {
     return i2c_master_transmit(s_dev, b, 3, 100) == ESP_OK;
 }
 
+static int curve_pct(int oc_mv) {
+    if (oc_mv >= k_curve[0].mv) return 100;
+    if (oc_mv <= k_curve[CURVE_N - 1].mv) return 0;
+    for (size_t i = 0; i + 1 < CURVE_N; i++) {
+        int hi = k_curve[i].mv, lo = k_curve[i + 1].mv;
+        if (oc_mv <= hi && oc_mv >= lo) {
+            int span = hi - lo;
+            int f = span ? (oc_mv - lo) * 100 / span : 100;
+            return k_curve[i + 1].pct + (k_curve[i].pct - k_curve[i + 1].pct) * f / 100;
+        }
+    }
+    return 0;
+}
+
 static void refresh(void) {
     int64_t now = esp_timer_get_time();
     if (now < s_next_us) return;
     s_next_us = now + 1000000;
-    uint16_t bus = 0;
-    if (rd16(REG_BUS_V, &bus)) s_bus_mv = (int)(bus * 1.25f);   /* 1.25 mV/LSB */
-    else s_bus_mv = 0;
+    uint16_t bus = 0, sh = 0;
+    if (!rd16(REG_BUS_V, &bus) || !rd16(REG_SHUNT_V, &sh)) { s_pct = -1; return; }
+    s_bus_mv = (int)(bus * 1.25f);                          /* 1.25 mV/LSB */
+    /* uV / mOhm = mA, and the sign convention turns it into charge-in-positive */
+    s_cur_ma = CHARGING_SIGN * (int)((float)(int16_t)sh * 2.5f / SHUNT_MOHM);
+    int oc_mv = s_bus_mv + (s_cur_ma < 0 ? -s_cur_ma : 0) * PACK_ESR_MOHM / 1000;   /* discharging: add the sag back */
+    s_pct = curve_pct(oc_mv);
 }
 
 bool battery_port_init(i2c_master_bus_handle_t bus) {
     if (!bus || i2c_master_probe(bus, INA226_ADDR, 50) != ESP_OK) {
-        ESP_LOGW(TAG, "no INA226 at 0x%02x: no supply monitor", INA226_ADDR);
+        ESP_LOGW(TAG, "no INA226 at 0x%02x: no gauge", INA226_ADDR);
         return false;
     }
     i2c_device_config_t cfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = INA226_ADDR, .scl_speed_hz = 400000 };
@@ -76,23 +117,28 @@ bool battery_port_init(i2c_master_bus_handle_t bus) {
     wr16(REG_CONFIG, CONFIG_VALUE);
     wr16(REG_CAL, (uint16_t)CAL_VALUE);
     refresh();
-    ESP_LOGI(TAG, "INA226 at 0x%02x: this board has no battery, so the meter stays hidden; its bus reads %d mV "
-                  "(the rail it watches; current assumes a %d mOhm shunt)", INA226_ADDR, s_bus_mv, SHUNT_MOHM);
+    ESP_LOGI(TAG, "INA226 at 0x%02x: 2S pack %d mV, %+d mA (%s), %d%% (shunt assumed %d mOhm; sign convention %s)",
+             INA226_ADDR, s_bus_mv, s_cur_ma, s_cur_ma >= CHARGE_MA_MIN ? "charging" : "discharging or idle",
+             s_pct, SHUNT_MOHM, CHARGING_SIGN < 0 ? "negative = charge in" : "positive = charge in");
     return true;
 }
 
-/* no battery: the tank hides the pill and the low-battery notices, and reads the
- * supply from battery_port_vbat_mv() instead */
 bool battery_port_read(float *frac, bool *charging) {
-    if (frac) *frac = -1.0f;
-    if (charging) *charging = false;
-    return false;
+    if (!s_dev) return false;
+    refresh();
+    if (s_pct < 0) return false;
+    if (frac) *frac = s_pct / 100.0f;
+    if (charging) *charging = s_cur_ma >= CHARGE_MA_MIN;
+    return true;
 }
 int battery_port_state(void) {
+    if (!s_dev) return BAT_ON_BATTERY;
     refresh();
-    return s_bus_mv >= 4000 ? BAT_PLUGGED : BAT_ON_BATTERY;   /* only ever "on the cable" or nothing */
+    if (s_cur_ma >= CHARGE_MA_MIN) return (s_bus_mv >= FULL_MV) ? BAT_FULL : BAT_CHARGING;
+    if (s_cur_ma <= -CHARGE_MA_MIN) return BAT_ON_BATTERY;
+    return BAT_PLUGGED;                 /* the cable is in, the charger is resting */
 }
-int battery_port_vbat_mv(void) { refresh(); return s_bus_mv; }
+int battery_port_vbat_mv(void) { if (!s_dev) return 0; refresh(); return s_bus_mv; }
 bool battery_port_poweroff(void) { return false; }            /* no PMIC to cut */
 
 /* the side button is PWR/RST/BOOT in hardware; the tank gets no key events */
@@ -106,9 +152,16 @@ bool battery_port_set_rail(const char *name, bool on) { (void)name; (void)on; re
 void battery_port_trim_rails(void) {}
 void battery_port_pin_rail(const char *name) { (void)name; }
 
-int  battery_port_charge_ma(void) { return 0; }
+/* the charger is the board's own IC; the tank can only report what the monitor
+ * sees, not set a current (`charge <mA>` on the director says so) */
+int  battery_port_charge_ma(void) { if (!s_dev) return 0; refresh(); return s_cur_ma > 0 ? s_cur_ma : 0; }
 bool battery_port_set_charge_ma(int ma) { (void)ma; return false; }
-void battery_port_charge_report(void) { ESP_LOGI(TAG, "no charger on this board (USB-C input only)"); }
+void battery_port_charge_report(void) {
+    if (!s_dev) { ESP_LOGI(TAG, "no gauge"); return; }
+    refresh();
+    ESP_LOGI(TAG, "pack %d mV, %+d mA (%s) - the charger is the board's own IC, not settable from here",
+             s_bus_mv, s_cur_ma, s_cur_ma >= CHARGE_MA_MIN ? "charging" : s_cur_ma <= -CHARGE_MA_MIN ? "on battery" : "idle");
+}
 
 void battery_port_dump(void) {
     if (!s_dev) { ESP_LOGI(TAG, "no INA226"); return; }
@@ -116,8 +169,8 @@ void battery_port_dump(void) {
     rd16(REG_CONFIG, &cfg); rd16(REG_BUS_V, &bus); rd16(REG_SHUNT_V, &sh);
     rd16(REG_CURRENT, &cur); rd16(REG_POWER, &pwr); rd16(REG_CAL, &cal);
     float shunt_uv = (float)(int16_t)sh * 2.5f;
-    int ma_shunt = (int)(shunt_uv / SHUNT_MOHM);            /* uV / mOhm = mA */
-    ESP_LOGI(TAG, "INA226 cfg 0x%04x cal %u | bus %d mV | shunt %.1f uV = %d mA at %d mOhm | "
-                  "current reg %d mA | power reg %u x25 mW (assumed shunt: check the schematic)",
-             cfg, cal, (int)(bus * 1.25f), shunt_uv, ma_shunt, SHUNT_MOHM, (int)(int16_t)cur, pwr);
+    ESP_LOGI(TAG, "INA226 cfg 0x%04x cal %u | bus %d mV (%d%%) | shunt %.1f uV = %+d mA at %d mOhm | "
+                  "current reg %+d mA | power reg %u x25 mW | state %d (assumed shunt: check the schematic)",
+             cfg, cal, (int)(bus * 1.25f), s_pct, shunt_uv, (int)(shunt_uv / SHUNT_MOHM), SHUNT_MOHM,
+             (int)(int16_t)cur, pwr, battery_port_state());
 }

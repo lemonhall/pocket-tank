@@ -122,25 +122,38 @@ g = [+0.866 +0.070 -0.514] - the screen's vertical in landscape is the panel's
 short axis X, so up = +X. Verified: the driver initialises, the samples are
 stable, no spurious flip fires.
 
-## 5. The gauge: there is no battery, so the port reports the rail
+## 5. The gauge: done - a 2S Li-ion pack, watched by the INA226
 
-**Measured:** the Tab5 has no battery (USB-C/DC input only), and Espressif's BSP
-has no battery code at all. The AXP2101 port answered "no PMIC" and the meter
-stayed hidden - which was already correct, but it told nobody anything.
+**This board does have a battery** (2S Li-ion; the bench unit reads 8.17-8.21 V,
+4.09-4.11 V/cell, ~90-93%), and its **INA226** (I2C 0x41, verified by its TI ids
+0x5449/0x2260) is the monitor for it - so `battery_port_tab5.c` is a real gauge,
+not a placeholder:
 
-**What landed:** `battery_port_tab5.c` - the board's **INA226** (I2C 0x41,
-verified by its TI ids 0x5449/0x2260) configured for 16-sample averages,
-1.1 ms conversions, shunt+bus continuous. `battery_port_read()` always says no,
-so the pill and the low-battery notices stay hidden exactly as before; the log's
-`battery -1% <mV>` now carries the INA226's own bus voltage (measured 8161 mV on
-the bench, which is the rail it watches - the schematic would say which), and
-the director's `battery` dumps bus/shunt/current/power. Its current and power
-registers need the board's shunt resistance: **5 mOhm is assumed and said so** -
-the bus and shunt voltages need no assumption, so the derived current is logged
-with that caveat rather than presented as measured.
-`set_rail`/`trim_rails`/`pin_rail` are no-ops (no PMIC: this board's rails are
-fixed), `poweroff()` is false (nothing to cut), and the key hooks are empty - the
-side button is PWR/RST/BOOT in hardware and the tank gets no key events from it.
+- the bus voltage is the pack (1.25 mV/LSB), the shunt the current (2.5 uV/LSB,
+  measured -1392.5 uV = -278 mA at 5 mOhm = 2.3 W with the tank running);
+- the percentage is a 2S Li-ion open-circuit table (8.40 V = 100% ... 6.00 V =
+  0%) interpolated linearly, with the pack's internal resistance compensated
+  while discharging (V_open = V + I_discharge x 150 mOhm) so a load does not read
+  as a flat battery;
+- the state follows the current's sign: charging (>= 30 mA), full (charging and
+  >= 8.30 V), on battery (<= -30 mA), plugged (the cable in, the charger resting);
+- `set_rail`/`trim_rails`/`pin_rail` are no-ops (no PMIC), `poweroff()` is false
+  (nothing to cut), the key hooks are empty (the side button is PWR/RST/BOOT in
+  hardware), and `charge <mA>` reports what the monitor sees rather than setting
+  anything - the charger is the board's own IC.
+
+**Two numbers here are assumptions, and both are said so in the log**: the shunt
+resistance is *assumed* 5 mOhm (the schematic is not in this repo; the chip's own
+current register agrees with the shunt arithmetic at 5 mOhm), and the sign
+convention - which way round IN+/IN- sit - cannot be read off the chip. The
+hypothesis "negative current = charge flowing in" is what the bench showed with
+the cable in (and the pack's voltage rose 8173 -> 8210 mV across it, and the
+board's own `batlog` history shows 8160 -> 8196 mV rising after a replug), which
+is why the gauge reports "cable in ... charging" at 93%. If a future unit comes
+out the other way, `CHARGING_SIGN` is the one constant to flip.
+
+**Verified:** the tank logs `battery 93% 8210 mV`, shows its own "cable in at 93%
+(charging) - the pill shows 6 s", and `pmic` dumps bus/shunt/current/power/state.
 
 ## 6. The radio: deliberately not brought up, and here is the argument
 
