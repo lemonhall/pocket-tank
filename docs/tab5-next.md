@@ -5,36 +5,41 @@ work queue). Six things, in the order they are worth doing, plus the two things
 that are *unverified* rather than undone. Every number here is measured on the
 bench unit - ST7123 glass, silicon rev v1.3 - not estimated.
 
-## 1. The advisor LLM on the P4: 2.2 tok/s (the big one)
+## 1. The advisor LLM on the P4: done, 2.2 -> 10.6 tok/s
 
-**Measured:** a decision takes ~19 s at 2.2 tok/s. The 1.8 board (ESP32-S3,
-240 MHz) does the same model at ~12 tok/s, ~3.7 s - the same code, the same
-7.56 MB model, read the same way (mmap'd from the model partition).
+**Measured:** a decision went from ~19.5 s at 2.2 tok/s to **4.06 s at 10.6
+tok/s** (the 1.8 board: ~12 tok/s, ~3.7 s) - the project's own line is that
+"decisions past 4 s are too slow", so this board is now on it rather than far
+past it.
 
-**Why:** `common/llm/q4_model.c`'s group dot product runs on the ESP32-S3's PIE
-128-bit unit (`#if defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(POCKET_TANK_NO_PIE)`).
-On this target `CONFIG_POCKET_TANK_NO_PIE=y`, so every weight is unpacked and
-dotted **scalar**. The P4 has a PIE unit of its own - the toolchain is already
-built for it (`-march=rv32imafc_zicsr_zifencei_xesppie` in every compile line) -
-but the kernel has never been written for it.
+**What landed:** `common/llm/q4_model.c` has a third kernel arm for this chip.
+The S3's asm translated one mnemonic at a time - `esp.zero.xacc`,
+`esp.vld.128.ip`, `esp.vmulas.s8.xacc` (the same 40-bit scalar accumulator the
+MAC sums its 16 int8 products into) and `esp.srs.s.xacc rd, rshift` reading it
+out where the S3 says `rur.accx_0 rd`. Boot bench, before -> after:
 
-**Where:** `common/llm/q4_model.c`, the `Q4_PIE` block and the group-dot
-functions around it (`q4_model.c:19-219` is the S3 assembly and its scalar
-fallback). A new `#elif defined(CONFIG_IDF_TARGET_ESP32P4)` arm, using the P4's
-SIMD intrinsics or inline asm (esp-dsp's `dsps_dotprod_*` for the P4, or
-`esp.cpu.simd` intrinsics), behind the same interface the scalar path uses.
+```
+dot100k        164706 us ->   8462 us   (19.5x)
+batch44 flash  415717 us ->  35340 us   (11.8x)
+batch44 ram    412987 us ->  32608 us
+decode flash    21593 us ->  12008 us   ( 1.8x)
+decode ram      18999 us ->   9322 us
+```
 
-**How to verify:** the boot log's own line
-(`t=... asks N decisions M last <ms> tok/s`), plus `model/runq4.c` on the host
-for correctness against the scalar path (bit-exactness is not required, the
-goal/urgency picks are what matter - the selftests already check those).
+**The trap, for whoever touches this next:** every general-purpose operand of a
+PIE instruction must be one of **twelve registers** - a0-a5, t3-t6, s0, s1. The
+assembler's `illegal operands` is the only warning, and `zero` (x0) is not one of
+them, so the read-out's shift needs a register holding 0. The pointers are pinned
+with local register variables; esp-dsp's `*_arp4.S` moves its argument registers
+into t3/t4 for the same reason.
 
-**Watch out:** the P4's PIE is a different ISA from the S3's (RISC-V vs
-Xtensa). The S3 arm's assumptions - 16-byte alignment, `gs == 64`, the
-unpack-once-dot-many shape - are worth keeping, the instructions are not. And
-`POP_CAP=5` in `firmware/components/tankcore/CMakeLists.txt` exists because
-advisor latency has never been measured on hardware that could afford 5 fish;
-if this lands, that cap is the next thing to re-read.
+**What is left here:** the *single-token* path still unpacks each 4-bit group in
+C (`unpack_group`), and that is now the decode bottleneck - the group dot is fast
+enough that 32 scalar nibble-splits per 64 weights cost more than the dot does.
+The S3 answers it with its `Q4_PK` kernel (`ee.andq` + `ee.vsr.32`, unpacking
+inside the vector unit); the P4 arm sets `Q4_PK 0` and takes the packed pointer
+path. Porting that is the next real win on this board, and the same trick applies
+to `matmul_batch`'s unpack.
 
 ## 2. Sound: the ES8388 (silence now)
 

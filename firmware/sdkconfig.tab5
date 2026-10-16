@@ -68,9 +68,10 @@ CONFIG_POCKET_TANK_TOUCH_GT911=y
 # TWO DSI frame buffers: the tank draws into the one the engine is not scanning
 # and hands it over at the frame boundary (display_port_tab5.c)
 CONFIG_BSP_LCD_DPI_BUFFER_NUMS=2
-# the engine's PIE kernels are the S3's instruction set; the P4 keeps the scalar
-# dot product (q4_model.c). The P4 has a PIE unit of its own - a later job.
-CONFIG_POCKET_TANK_NO_PIE=y
+# the PIE path is ON for this board: q4_model.c now has the P4's own kernels
+# (esp.vmulas.s8.xacc into the 40-bit xacc, the same shape as the S3's
+# ee.vmulas.s8.accx), and the advisor checks them against the scalar dot at
+# every boot. CONFIG_POCKET_TANK_NO_PIE would force the scalar path back.
 
 # ---- no signed images on this board yet: the project's key
 # (firmware/keys/ota_signing_key.pem, tools/ota_key.sh) is not in the repo, so a

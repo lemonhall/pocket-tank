@@ -147,13 +147,20 @@ I (21254) display: frame 38.9 ms = polls 0.3 + tick 0.7 + prefetch wait 0.0 + re
   frames and LLM decisions share one budget), so the port is no longer
   frame-limited: the render is 17.5 ms of the ~24 ms it is allowed.
 - the tank, the save, the shop, the pages and the touch all run.
-- **the advisor LLM is the weak spot: 2.2 tok/s, ~19 s a decision** (the 1.8
-  board does ~12 tok/s, ~3.7 s). Cause: the P4 build runs the engine's
-  *scalar* dot product - `CONFIG_POCKET_TANK_NO_PIE` - because `q4_model.c`'s
-  SIMD kernels are the ESP32-S3's PIE. The P4 has a PIE unit of its own
-  (`-march=rv32imafc_zicsr_zifencei_xesppie` is already the toolchain's), so
-  that is the next real job on this board. Until then the fish decide slowly
-  (the reflex layer keeps them moving, so the tank lives).
+- **the advisor LLM: 10.6 tok/s, 4.06 s a decision** (the 1.8 board does ~12
+  tok/s, ~3.7 s), against 2.2 tok/s and 19.5 s before the P4's PIE kernels
+  existed. `q4_model.c` now carries a third kernel arm for this chip - the S3's
+  four kernels translated one mnemonic at a time (`esp.vmulas.s8.xacc` into the
+  40-bit `xacc`, `esp.srs.s.xacc` to read it out) - and the advisor checks them
+  against the scalar dot at every boot. The measured jumps: the group-dot kernel
+  19.5x, a 44-token prefill 11.8x, the single-token decode 1.8x. That last one
+  is the remaining work, and it is not the dot any more: it is the scalar nibble
+  *unpack* (the S3 does it with `ee.andq`/`ee.vsr.32` inside its `Q4_PK` kernel;
+  the P4 arm still unpacks in C), which is why decode moved least.
+  The trap that costs an afternoon: **every GPR operand of a PIE instruction must
+  be one of twelve registers** - a0-a5, t3-t6, s0, s1 - and the assembler's
+  "illegal operands" is the only warning you get (`zero` is not allowed as the
+  read-out's shift, which needs a register holding 0).
 
 Also still missing, in the order they would be worth doing: the ES8388 (sound),
 the RX8130CE (a real clock across a power-off), the BMI270 (auto-flip), the

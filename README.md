@@ -51,8 +51,9 @@ than an ILI9881C - so it builds with its own ESP-IDF and its own config
 still the tank: a 720 x 405 world the P4's pixel-processing accelerator turns a
 quarter and scales onto the glass at 25.7 fps. [docs/board-tab5.md](docs/board-tab5.md)
 is the port and its traps; [docs/tab5-next.md](docs/tab5-next.md) is what is
-still missing on it (the advisor's PIE kernel first and foremost: 2.2 tok/s
-where the 1.8 does 12).
+still missing on it (sound, the RTC, the IMU, the gauge, the ESP32-C6's Wi-Fi -
+the advisor's P4 PIE kernels landed 2026-10-16: 10.6 tok/s and 4.06 s a
+decision, against 2.2 tok/s and 19.5 s with the scalar path).
 
 | The 1.8 | The pendant | The watch | The square |
 |:---:|:---:|:---:|:---:|
@@ -642,8 +643,9 @@ to lose a day is to assume otherwise: the ILI9881C driver's first act is a DSI
 read that glass never answers, and the DSI HAL has no timeout, so the firmware
 stops with no log line at all. [docs/board-tab5.md](docs/board-tab5.md) has that
 trail, the numbers, and [docs/tab5-next.md](docs/tab5-next.md) what is still
-missing (sound, RTC, IMU, the gauge, the ESP32-C6's Wi-Fi - and the advisor's P4
-SIMD kernel, which is why its decisions are slow for now).
+missing (sound, RTC, IMU, the gauge, the ESP32-C6's Wi-Fi - and the advisor's
+single-token cache path, which the P4's PIE kernels took from 2.2 to 10.6
+tok/s).
 
 Each board's touch panel is calibrated in its touch port, so a tap lands
 where the finger is. [docs/BOARDS.md](docs/BOARDS.md) has what they
