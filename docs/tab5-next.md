@@ -64,7 +64,7 @@ every attempt timed out - and **confirmed by ear** on 2026-10-17 ("我的确听�
 at volume 2, with the audio chain's far end (the ES8388's output mixer and the
 speaker amp on the IO expander) untouched from the BSP's own defaults. Three
 things had to be true, and a 60-line standalone probe
-(`E:\development\.tmp\i2s_probe`: `new_channel` -> `init_std_mode` ->
+(`E:\development\tab5-i2s-probe`, kept outside `.tmp`: `new_channel` -> `init_std_mode` ->
 `preload` -> `enable` -> `write`, printing every return code, plus the
 peripheral's own `bck_cnt`) is what separated them.
 
