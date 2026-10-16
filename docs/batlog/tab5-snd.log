@@ -1,0 +1,28 @@
+W (4577) director: update mode: only wifi / ota / help (ota tap <x> <y>, ota page)
+I (9977) update: provisioning over: the page never asked
+W (9977) rtc: no RTC chip on this board: the ESP32's own clock (still running from before this boot)
+I (9978) model: trailer: model v3m, 7557640 bytes - good
+I (9982) advisor: kernel check: the PIE dot matches the scalar dot
+I (9982) advisor: bench: dot100k 8460 us | batch44 flash 35337 us ram 32601 us | decode flash 12032 us ram 9248 us
+I (10090) advisor: model dim 384 layers 8 vocab 54 seq 64, schema v4, sampled decoding
+I (10090) pocket-tank: model partition 8192 KB mmap'd, advisor LLM
+I (10091) pocket-tank: after the advisor: internal heap 264 KB free
+I (10091) pocket-tank: dirty mask internal SRAM
+I (10091) pocket-tank: card cache internal SRAM
+W (10092) codec: no ES8311 at 0x18/0x19
+W (10092) i2s_common: dma frame num is adjusted to 256 to align the dma buffer with 64, bufsize = 512
+W (10093) i2s_common: the rx channel on I2S1 is switched from master to slave for full-duplex mode
+W (10093) i2s_common: dma frame num is adjusted to 256 to align the dma buffer with 64, bufsize = 512
+I (10106) audio: ES8388 ready: 17 of 24 cues, bank 518 KB in flash, volume 2; warm while handled (touch / IMU), down 5 s after
+W (10106) imu: no QMI8658
+I (10107) pocket-tank: scene restore: CPU memcpy (this chip's DMA copy measured ~9 MB/s: see main.c)
+I (10110) pocket-tank: cold boot: 0.1 h lived through since the save | hunger[0] 4.7 | battery -1% 0 mV
+I (10111) pocket-tank: the save was written by v0.3.5
+I (10111) pocket-tank: population 2 (cap 5): nori + bolt ...
+I (10200) display: stats card: redraw 8.1 ms, blit 1.3 ms per frame
+I (10201) pocket-tank: app_main done: internal heap 150 KB free (largest block 62 KB); the tank task starts once this stack is freed
+I (10202) main_task: Returned from app_main()
+I (10402) pocket-tank: starting the tank task: internal heap 168 KB free (largest block 62 KB)
+I (10402) pocket-tank: tank task up | heap int 155 KB
+I (10403) M5Stack Tab5: Setting LCD backlight: 100%
+I (10442) touch: touch: read 0.36 ms, the whole poll 0.39 ms (3 polls, 0 with a finger)

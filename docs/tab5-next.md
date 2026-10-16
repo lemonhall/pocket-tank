@@ -33,32 +33,55 @@ them, so the read-out's shift needs a register holding 0. The pointers are pinne
 with local register variables; esp-dsp's `*_arp4.S` moves its argument registers
 into t3/t4 for the same reason.
 
-**What is left here:** the *single-token* path still unpacks each 4-bit group in
-C (`unpack_group`), and that is now the decode bottleneck - the group dot is fast
-enough that 32 scalar nibble-splits per 64 weights cost more than the dot does.
-The S3 answers it with its `Q4_PK` kernel (`ee.andq` + `ee.vsr.32`, unpacking
-inside the vector unit); the P4 arm sets `Q4_PK 0` and takes the packed pointer
-path. Porting that is the next real win on this board, and the same trick applies
-to `matmul_batch`'s unpack.
+**Where the time goes now, if anyone wants more** (not needed for the bar): the
+*single-token* path still unpacks each 4-bit group in C (`unpack_group`), and the
+PIE dot is now fast enough that the unpack dominates the decode - one w1 matrix
+costs 0.52 ms of dotting against 12.0 ms total. The S3 answers this with its
+`Q4_PK` kernel (`ee.andq` + `ee.vsr.32`, unpacking inside the vector unit); the
+P4 arm sets `Q4_PK 0`. A port is *possible* but was not done: the P4 exposes
+shifts only through its `src`/`srci` family, and a hardware probe (feeding
+`0x10..0x2f` through `esp.srci.2q q, q, 4` and `esp.src.q` with `sar.bytes`)
+matched no simple shift interpretation - `srci.2q` added 8 to the first half's
+bytes and the funnel shift returned zeros - so those semantics want a datasheet
+and not a guess. The low-risk version of the same idea is a 256-entry
+byte -> two centred int8 values lookup table in `unpack_group`.
 
-## 2. Sound: the ES8388 (silence now)
+## 2. Sound: the port is written, the chip's I2S is the block
 
-**Measured:** `codec: no ES8311 at 0x18/0x19` - the port probes the Waveshare
-boards' codec. This board's codec is an **ES8388 at I2C 0x10** (the I2C scan
-finds it), with the speaker amp on the expander's **SPEAKER_EN (0x43 bit 1)**,
-which this port currently leaves LOW (deliberately: `display_port_tab5.c`'s
-`expander_panel_on`).
+**Measured:** the ES8388 answers at I2C 0x10 and the tank's codec device opens
+("ES8388: Start on mode:2", "Adev_Codec: Open codec device OK", 17 of 24 cues,
+518 KB bank), but **I2S TX does not start on this unit**: every write times out
+with 0 bytes done (`ESP_ERR_TIMEOUT`/263), the DMA's descriptor queue never
+frees, and the BCLK pad is dead (0 of 4000 samples high, 0 transitions). Tried
+and all identical: I2S0 and I2S1; `I2S_CLK_SRC_XTAL` and `I2S_CLK_SRC_APLL`; 16
+kHz and 48 kHz; MONO and STEREO; the BSP's own channel and this port's; and
+*before* the display/PPA/DSI are initialised as well as after. The APLL does
+engage ("APLL is occupied already, it is working at 8191999 Hz"), so the clock
+tree's source selection is not the problem - the peripheral never shifts a frame.
 
-**Where:** a new `audio_port_es8388.c` alongside `audio_port_es8311.c` (the
-same `audio_port.h` contract: `audio_port_init/play/stop/...`), plus the I2S
-pins in `board_pins.h` (`T_PIN_I2S_*`, already named) and `CONFIG_POCKET_TANK_AUDIO_*`
-selection in `firmware/main/CMakeLists.txt`. `esp_codec_dev` (already in the
-tree through the BSP) has an ES8388 driver, or the register sequence can be
-written the way the ES8311's was.
+**One real trap found and fixed on the way** (keep it even once the above is
+solved): `I2S_CLK_SRC_DEFAULT` (0) means "auto-select the fastest source", which
+on the P4 is `I2S_CLK_SRC_PLL_160M` - and `clk_tree_defs.h` marks that source
+"only supported on P4 hw_ver3". This unit is **pre-v3** (rev v1.3), so
+`audio_port_tab5.c` asks for the APLL explicitly, both in its own `std` config
+and in the codec dev's `audio_codec_i2s_cfg_t.clk_src` (which is what the codec
+dev reconfigures with). The same trap exists in the Zephyr port of this driver
+([zephyr#114566](https://github.com/zephyrproject-rtos/zephyr/issues/114566)).
 
-**How to verify:** `docs/AUDIO.md`'s cues through the settings page's volume
-row, and the amp's idle-off behaviour (the port's whole point is that the codec
-and the amp are down when nothing plays).
+**What the port does about it:** `bring_up()` bounds itself - the first failed
+write ends the attempt, `i2s_dead()` says why once, and later cues are answered
+without touching the I2S again (`snd` on the console prints `i2s-dead`). Without
+that, one bring-up costs 15 x 1 s of timeouts and the tank stalls a second per
+cue with nothing to show for it.
+
+**What is left, in the order worth trying:** (1) build a minimal I2S TX test
+against another IDF line (5.4.x, or a newer 5.5.x than the v5.5.6 used here) to
+see whether this is a regression or a pre-v3 gap in the I2S HAL - the tank must
+stay on 5.5.x for the BSP's `usb` dependency, so a fix has to come from IDF;
+(2) ask Espressif/M5 whether pre-v3 P4 silicon needs an I2S workaround (the
+"huge hardware difference" note in `Kconfig.hw_support` suggests it may);
+(3) in the meantime the tank is silent but not slowed, and this board's other
+four ports below are the ones to finish first.
 
 ## 3. The clock: the RX8130CE (a real RTC at last)
 

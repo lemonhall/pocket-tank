@@ -1,0 +1,133 @@
+I (217) esp_image: segment 5: paddr=0017a18c vaddr=4ff0bffc size=09334h ( 37684) load
+I (225) esp_image: segment 6: paddr=001834c8 vaddr=4ff15380 size=03888h ( 14472) load
+I (228) esp_image: segment 7: paddr=00186d58 vaddr=50108080 size=00064h (   100) load
+I (230) esp_image: segment 8: paddr=00186dc4 vaddr=50108c18 size=00020h (    32) load
+I (236) boot: Loaded app from partition at offset 0x10000
+I (240) hex_psram: vendor id    : 0x0d (AP)
+I (240) hex_psram: Latency      : 0x01 (Fixed)
+I (241) hex_psram: DriveStr.    : 0x00 (25 Ohm)
+I (241) hex_psram: dev id       : 0x03 (generation 4)
+I (242) hex_psram: density      : 0x07 (256 Mbit)
+I (242) hex_psram: good-die     : 0x06 (Pass)
+I (243) hex_psram: SRF          : 0x02 (Slow Refresh)
+I (243) hex_psram: BurstType    : 0x00 ( Wrap)
+I (244) hex_psram: BurstLen     : 0x03 (2048 Byte)
+I (245) hex_psram: BitMode      : 0x01 (X16 Mode)
+I (245) hex_psram: Readlatency  : 0x04 (14 cycles@Fixed)
+I (246) hex_psram: DriveStrength: 0x00 (1/1)
+I (246) MSPI Timing: Enter psram timing tuning
+I (414) esp_psram: Found 32MB PSRAM device
+I (415) esp_psram: Speed: 200MHz
+I (418) hex_psram: psram CS IO is dedicated
+I (418) cpu_start: Multicore app
+I (428) cpu_start: GPIO 38 and 37 are used as console UART I/O pins
+I (429) cpu_start: Pro cpu start user code
+I (429) cpu_start: cpu freq: 360000000 Hz
+I (429) app_init: Application information:
+I (430) app_init: Project name:     pocket_tank
+I (430) app_init: App version:      1a4f5d6-dirty
+I (430) app_init: Compile time:     Oct 16 2026 22:08:33
+I (430) app_init: ELF file SHA256:  c50a8b519...
+I (431) app_init: ESP-IDF:          v5.5.6
+I (431) efuse_init: Min chip rev:     v1.0
+I (431) efuse_init: Max chip rev:     v1.99 
+I (431) efuse_init: Chip rev:         v1.3
+I (432) heap_init: Initializing. RAM available for dynamic allocation:
+I (432) heap_init: At 4FF21E40 len 00019180 (100 KiB): RETENT_RAM
+I (433) heap_init: At 4FF3AFC0 len 00004BF0 (18 KiB): RAM
+I (433) heap_init: At 4FF40000 len 00040000 (256 KiB): RAM
+I (434) heap_init: At 50108C38 len 000073C8 (28 KiB): RTCRAM
+I (434) heap_init: At 301005B0 len 00001A50 (6 KiB): SPM
+I (434) esp_psram: Adding pool of 32768K of PSRAM memory to heap allocator
+I (435) spi_flash: detected chip: generic
+I (435) spi_flash: flash io: qio
+I (436) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (436) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (437) main_task: Started on CPU0
+I (437) esp_psram: Reserving pool of 64K of internal memory for DMA/internal allocations
+I (438) main_task: Calling app_main()
+I (438) pocket-tank: pocket-tank v0.3.5 alpha (build 1a4f5d6-dirty) for tab5 boot
+I (441) director: console ready (type help)
+
+IMPROV�
+I (443) pocket-tank: batlog: 5 samples carried through the reset (director `batlog` reads them)
+I (443) pocket-tank: PSRAM total 32768 KB free 32765 KB | internal free 369 KB
+I (444) pocket-tank: PSRAM plan OK (need 4723 KB)
+I (444) display: Tab5 display: the BSP brings the glass up | tank 720x405 turned 90 deg, scaled 1.7778
+I (446) M5Stack Tab5: MIPI DSI PHY Powered on
+I (946) M5Stack Tab5: Discovered board version 2 (LCD ST7123, Touch ST7123, FW 3)
+I (948) M5Stack Tab5: Install MIPI DSI LCD control panel
+I (948) st7123: version: 1.0.2
+W (1215) st7123: The 36h command has been used and will be overwritten by external initialization sequence
+I (1405) M5Stack Tab5: Display initialized with resolution 720x1280
+I (1405) display: panel up (720 x 1280, 2 frame buffers): the turn and the scale are the PPA's from here
+I (1405) display: fb 0x4811d8c0 / 0x482df900 (1800 KB each)
+I (1405) M5Stack Tab5: Setting LCD backlight: 100%
+I (1907) ST7123: Firmware version: 3(1.71.1.3), Max.X: 720, Max.Y: 1280, Max.Touchs: 10
+I (1907) ST7123: Touch panel create success, version: 1.0.2
+I (1907) touch: touch ready (ST712x at 400 kHz)
+W (1907) battery: no AXP2101
+I (1908) battery: rail aldo1 pinned on (FAILED)
+I (1909) codec: ES7210 @0x40 suspended (POWER_DOWN 07)
+I (1909) battery: rails trimmed: 0 of 12 unused outputs off (dcdc1 = VCC3V3 and the RTC LDO stay)
+I (1910) update: provisioning: a reset over USB and no network saved - the glass stays dark while the installer page may ask (8 s)
+I (9937) update: provisioning over: the page never asked
+W (9937) rtc: no RTC chip on this board: the ESP32's own clock (still running from before this boot)
+I (9938) model: trailer: model v3m, 7557640 bytes - good
+I (9942) advisor: kernel check: the PIE dot matches the scalar dot
+I (9942) advisor: bench: dot100k 8460 us | batch44 flash 35319 us ram 32645 us | decode flash 12010 us ram 9312 us
+I (10050) advisor: model dim 384 layers 8 vocab 54 seq 64, schema v4, sampled decoding
+I (10051) pocket-tank: model partition 8192 KB mmap'd, advisor LLM
+I (10051) pocket-tank: after the advisor: internal heap 265 KB free
+I (10052) pocket-tank: dirty mask internal SRAM
+I (10052) pocket-tank: card cache internal SRAM
+W (10052) codec: no ES8311 at 0x18/0x19
+E (10064) i2s_common: i2s_channel_disable(1378): the channel has not been enabled yet
+I (10065) I2S_IF: No paired data, current mode: playback
+I (10065) I2S_IF: STD: TX, data_bit: 16, slot_bit: 16, ws_width: 16, slot_mode: MONO, slot_mask: 0x1
+I (10065) I2S_IF: STD: TX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 0
+I (10071) ES8388: Start on mode:2
+I (10073) Adev_Codec: Open codec device OK
+I (10075) audio: ES8388 ready: 17 of 24 cues, bank 518 KB in flash, volume 2; warm while handled (touch / IMU), down 5 s after
+I (10075) audio: player task: running
+W (10075) imu: no QMI8658
+I (10075) pocket-tank: scene restore: CPU memcpy (this chip's DMA copy measured ~9 MB/s: see main.c)
+I (10079) pocket-tank: cold boot: 0.0 h lived through since the save | hunger[0] 5.9 | battery -1% 0 mV
+I (10079) pocket-tank: the save was written by v0.3.5
+I (10080) pocket-tank: population 2 (cap 5): nori + bolt ...
+I (10168) display: stats card: redraw 7.7 ms, blit 1.2 ms per frame
+I (10169) pocket-tank: app_main done: internal heap 156 KB free (largest block 62 KB); the tank task starts once this stack is freed
+I (10169) main_task: Returned from app_main()
+I (10369) pocket-tank: starting the tank task: internal heap 173 KB free (largest block 62 KB)
+I (10370) pocket-tank: tank task up | heap int 161 KB
+I (10370) M5Stack Tab5: Setting LCD backlight: 100%
+I (10448) touch: touch: read 0.36 ms, the whole poll 0.38 ms (5 polls, 0 with a finger)
+I (14506) advisor: zone 2 hunger 5 energy 0 stress 0 curiosity 1 bold 2 social 2 stage fry trust 5 bored 0 food none friend far 6 bubble mid 2 reef none wall mid 10 last explore time day -> inspect_reef urgency 3 p=0.42  [4134 ms, 10.2 tok/s]
+I (14507) advisor: prof ms: matmul 2047 attn 252 norm/quant 68 rope 25 swiglu 169 decode 1563
+I (18637) advisor: zone 5 hunger 7 energy 0 stress 0 curiosity 6 bold 7 social 8 stage fry trust 5 bored 0 food none friend mid 1 bubble far 1 reef far 7 wall mid 5 last explore time day -> follow_friend urgency 4 p=0.93  [4129 ms, 10.4 tok/s]
+I (18638) advisor: prof ms: matmul 2020 attn 264 norm/quant 70 rope 25 swiglu 175 decode 1564
+I (20418) display: fb mid 0x0925 corner 0x0000 | scene mid 0x0925 ep 1 | night 0 prefetch 0
+I (20418) display: 25.7 fps | render 23.0 ms flush 1.7 ms | scene 17.6 shafts 0.0 veg 2.2 fd/bub 0.3 fish 2.1 vig 0.7 algae 0.2 | card 0.0 ms x0 | veg 0.40 0.41 0.39
+I (20419) display: flush parts (Tab5): prefetch issue 0.0 + port 1.2 + touch 0.5 = 1.7 of 1.7
+I (20420) display: frame 38.9 ms = polls 0.4 + tick 1.2 + prefetch wait 0.0 + render 23.0 + flush 1.7 + tail 0.0 + sleep 12.7 | flush: fill 1.7, wire wait 0.0, send calls 0.0
+I (20420) pocket-tank: t=151s 2 fish goals: inspect_reef follow_friend | asks 2 decisions 2 last 4129 ms 10.4 tok/s | starve-ignored 0 | heap int 160 KB psram 24832 KB | battery -1% 0 mV bright 255
+I (20457) touch: touch: read 0.37 ms, the whole poll 0.40 ms (513 polls, 0 with a finger)
+I (20555) audio: play error -> started (active 1, up 0)
+I (20556) director: snd error
+E (20556) i2s_common: i2s_channel_disable(1378): the channel has not been enabled yet
+I (20556) I2S_IF: No paired data, current mode: playback
+I (20557) I2S_IF: STD: TX, data_bit: 16, slot_bit: 16, ws_width: 16, slot_mode: MONO, slot_mask: 0x1
+I (20557) I2S_IF: STD: TX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 0
+I (20564) ES8388: Start on mode:2
+I (20566) Adev_Codec: Open codec device OK
+I (20567) audio: TEMP bring_up: open -> 0 (11150 us)
+I (26046) advisor: zone 2 hunger 5 energy 0 stress 0 curiosity 1 bold 2 social 2 stage fry trust 5 bored 1 food far 2 friend near 11 bubble mid 7 reef far 12 wall mid 4 last inspect_reef time day -> follow_friend urgency 3 p=0.51  [4242 ms, 10.4 tok/s]
+I (26047) advisor: prof ms: matmul 2072 attn 304 norm/quant 74 rope 25 swiglu 178 decode 1578
+I (30185) advisor: zone 2 hunger 7 energy 0 stress 0 curiosity 6 bold 7 social 8 stage fry trust 5 bored 0 food far 6 friend near 9 bubble far 11 reef far 4 wall clear last follow_friend time day -> follow_friend urgency 4 p=0.89  [4130 ms, 10.4 tok/s]
+I (30186) advisor: prof ms: matmul 2018 attn 263 norm/quant 68 rope 25 swiglu 180 decode 1564
+I (30442) display: fb mid 0x551e corner 0x0000 | scene mid 0x0925 ep 1 | night 0 prefetch 0
+I (30442) display: 25.6 fps | render 23.3 ms flush 1.7 ms | scene 17.6 shafts 0.0 veg 2.2 fd/bub 0.3 fish 2.1 vig 0.7 algae 0.2 | card 0.0 ms x0 | veg 0.40 0.41 0.39
+I (30443) display: flush parts (Tab5): prefetch issue 0.0 + port 1.2 + touch 0.6 = 1.7 of 1.7
+I (30443) display: frame 39.0 ms = polls 0.4 + tick 1.2 + prefetch wait 0.0 + render 23.3 + flush 1.7 + tail 0.0 + sleep 12.4 | flush: fill 1.7, wire wait 0.0, send calls 0.0
+I (30444) pocket-tank: t=161s 2 fish goals: follow_friend follow_friend | asks 4 decisions 4 last 4130 ms 10.4 tok/s | starve-ignored 0 | heap int 160 KB psram 24832 KB | battery -1% 0 mV bright 255
+I (30462) touch: touch: read 0.37 ms, the whole poll 0.40 ms (513 polls, 0 with a finger)

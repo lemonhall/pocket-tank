@@ -61,6 +61,14 @@ menu "pocket-tank"
         default n
         help
             Enable for the real board (docs/AUDIO.md). Off = stub audio port: cues compile, nothing plays.
+    config POCKET_TANK_AUDIO_TAB5
+        bool "Play the sound bank through the Tab5's ES8388 + speaker amp (I2S, via the BSP)"
+        default n
+        help
+            The Tab5's codec is an ES8388 (I2C 0x10) and its speaker amp hangs off
+            the IO expander, so this port lets Espressif's Tab5 BSP own the I2S
+            channel and the codec and runs only the tank's mixer, power and settle
+            behaviour on top (audio_port_tab5.c). Off = stub audio port.
     config POCKET_TANK_NO_PIE
         bool "Disable the PIE SIMD inference kernel (scalar dot products)"
         default n

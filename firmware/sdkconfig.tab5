@@ -65,6 +65,9 @@ CONFIG_BT_ENABLED=n
 CONFIG_POCKET_TANK_TAB5=y
 CONFIG_POCKET_TANK_DISPLAY_TAB5=y
 CONFIG_POCKET_TANK_TOUCH_GT911=y
+# sound: the ES8388 at I2C 0x10 and the amp on expander #0's bit 1, both through
+# the BSP (audio_port_tab5.c)
+CONFIG_POCKET_TANK_AUDIO_TAB5=y
 # TWO DSI frame buffers: the tank draws into the one the engine is not scanning
 # and hands it over at the frame boundary (display_port_tab5.c)
 CONFIG_BSP_LCD_DPI_BUFFER_NUMS=2
